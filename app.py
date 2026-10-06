@@ -6,8 +6,31 @@ from email.mime.multipart import MIMEMultipart
 import time
 import re
 import io
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Bulk Email Sender", page_icon="📧", layout="centered")
+
+# ── Query Params se Credentials load karo ──
+query_params = st.query_params
+saved_gmail = query_params.get("gmail", "")
+saved_pwd = query_params.get("app_pwd", "")
+
+# ── JavaScript LocalStorage Auto-Sync (Agar query param na ho toh localStorage se uthaye) ──
+js_code = """
+<script>
+    const storedEmail = localStorage.getItem("bulk_email_user") || "";
+    const storedPwd = localStorage.getItem("bulk_email_pwd") || "";
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    // Agar URL params me nahi hai aur localStorage me hai, to URL update karo reload ke sath
+    if ((!urlParams.get("gmail") && storedEmail) || (!urlParams.get("app_pwd") && storedPwd)) {
+        if (storedEmail) urlParams.set("gmail", storedEmail);
+        if (storedPwd) urlParams.set("app_pwd", storedPwd);
+        window.location.search = urlParams.toString();
+    }
+</script>
+"""
+components.html(js_code, height=0)
 
 st.title("📧 Bulk Email Sender")
 st.markdown("Apni Excel file upload karo aur sab clients ko ek click mein email bhejo!")
@@ -15,8 +38,37 @@ st.markdown("Apni Excel file upload karo aur sab clients ko ek click mein email 
 # ── SIDEBAR — Credentials ──
 with st.sidebar:
     st.header("⚙️ Gmail Setup")
-    gmail = st.text_input("Aapka Gmail", placeholder="example@gmail.com")
-    app_password = st.text_input("Gmail App Password", type="password", placeholder="xxxx xxxx xxxx xxxx")
+    
+    gmail = st.text_input("Aapka Gmail", value=saved_gmail, placeholder="example@gmail.com")
+    app_password = st.text_input("Gmail App Password", value=saved_pwd, type="password", placeholder="xxxx xxxx xxxx xxxx")
+    
+    remember_me = st.checkbox("💾 Remember Me (Browser mein save rakho)", value=bool(saved_gmail and saved_pwd))
+    
+    if remember_me and gmail and app_password:
+        st.query_params["gmail"] = gmail
+        st.query_params["app_pwd"] = app_password
+        # LocalStorage me save karo
+        save_js = f"""
+        <script>
+            localStorage.setItem("bulk_email_user", "{gmail}");
+            localStorage.setItem("bulk_email_pwd", "{app_password}");
+        </script>
+        """
+        components.html(save_js, height=0)
+        st.caption("✅ Credentials browser me save hain!")
+    elif not remember_me:
+        if "gmail" in st.query_params:
+            del st.query_params["gmail"]
+        if "app_pwd" in st.query_params:
+            del st.query_params["app_pwd"]
+        clear_js = """
+        <script>
+            localStorage.removeItem("bulk_email_user");
+            localStorage.removeItem("bulk_email_pwd");
+        </script>
+        """
+        components.html(clear_js, height=0)
+
     st.caption("App Password kaise banayein? [Click here](https://myaccount.google.com/apppasswords)")
     st.markdown("---")
     st.markdown("**App Password Steps:**")
@@ -98,9 +150,21 @@ def send_emails(gmail_addr, app_pwd, subj, msg_body, emails):
 
     progress = st.progress(0)
     status_text = st.empty()
-    results_box = st.empty()
 
-    for i, email in enumerate(emails):
+    RECONNECT_EVERY = 45  # Har 45 emails ke baad auto reconnect (300+ emails support)
+
+    for i, email in enumerate(emails, 1):
+        if i > 1 and (i - 1) % RECONNECT_EVERY == 0:
+            try:
+                server.quit()
+            except:
+                pass
+            time.sleep(2)
+            try:
+                server = connect()
+            except Exception as e:
+                pass
+
         try:
             msg = MIMEMultipart()
             msg['From'] = gmail_addr
@@ -120,15 +184,15 @@ def send_emails(gmail_addr, app_pwd, subj, msg_body, emails):
                 server.send_message(msg)
 
             sent += 1
-            status_text.success(f"[{i+1}/{len(emails)}] Sent: {email}")
-            time.sleep(1.5)
+            status_text.success(f"[{i}/{len(emails)}] Sent: {email}")
+            time.sleep(1.2)
 
         except Exception as e:
             failed += 1
             failed_list.append(email)
-            status_text.error(f"[{i+1}/{len(emails)}] FAIL: {email}")
+            status_text.error(f"[{i}/{len(emails)}] FAIL: {email}")
 
-        progress.progress((i+1) / len(emails))
+        progress.progress(i / len(emails))
 
     try:
         server.quit()
