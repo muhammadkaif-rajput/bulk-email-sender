@@ -15,14 +15,13 @@ query_params = st.query_params
 saved_gmail = query_params.get("gmail", "")
 saved_pwd = query_params.get("app_pwd", "")
 
-# ── JavaScript LocalStorage Auto-Sync (Agar query param na ho toh localStorage se uthaye) ──
+# ── JavaScript LocalStorage Auto-Sync ──
 js_code = """
 <script>
     const storedEmail = localStorage.getItem("bulk_email_user") || "";
     const storedPwd = localStorage.getItem("bulk_email_pwd") || "";
     const urlParams = new URLSearchParams(window.location.search);
     
-    // Agar URL params me nahi hai aur localStorage me hai, to URL update karo reload ke sath
     if ((!urlParams.get("gmail") && storedEmail) || (!urlParams.get("app_pwd") && storedPwd)) {
         if (storedEmail) urlParams.set("gmail", storedEmail);
         if (storedPwd) urlParams.set("app_pwd", storedPwd);
@@ -33,7 +32,7 @@ js_code = """
 components.html(js_code, height=0)
 
 st.title("📧 Bulk Email Sender")
-st.markdown("Apni Excel file upload karo aur sab clients ko ek click mein email bhejo!")
+st.markdown("Excel file upload karein ya seedha emails copy-paste karke send karein!")
 
 # ── SIDEBAR — Credentials ──
 with st.sidebar:
@@ -47,7 +46,6 @@ with st.sidebar:
     if remember_me and gmail and app_password:
         st.query_params["gmail"] = gmail
         st.query_params["app_pwd"] = app_password
-        # LocalStorage me save karo
         save_js = f"""
         <script>
             localStorage.setItem("bulk_email_user", "{gmail}");
@@ -78,60 +76,88 @@ with st.sidebar:
 
 # ── EMAIL CONTENT ──
 st.subheader("📝 Email Content")
-col1, col2 = st.columns([1,1])
-with col1:
-    subject = st.text_input("Subject", placeholder="Yahan subject likho")
-with col2:
-    st.write("")
+subject = st.text_input("Subject", placeholder="Yahan subject likho")
+body = st.text_area("Email Body", height=180, placeholder="Yahan apna email content likho...")
 
-body = st.text_area("Email Body", height=200, placeholder="Yahan apna email content likho...")
-
-# ── EXCEL UPLOAD ──
+# ── CLIENTS KI LIST (EXCEL YA COPY-PASTE) ──
 st.subheader("📂 Clients Ki List")
-uploaded_file = st.file_uploader("Excel file upload karo (.xlsx)", type=["xlsx", "xls", "csv"])
+input_mode = st.radio(
+    "List add karne ka tarika chunein:",
+    ["📁 Excel / CSV File Upload", "📋 Copy & Paste Emails"],
+    horizontal=True
+)
 
 emails_list = []
+pattern = r'[\w\.\+\-]+@[\w\-]+(?:\.[\w\-]+)+'
 
-if uploaded_file:
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+if input_mode == "📁 Excel / CSV File Upload":
+    uploaded_file = st.file_uploader("Excel file upload karo (.xlsx, .csv)", type=["xlsx", "xls", "csv"])
 
-        st.success(f"File load ho gayi! {len(df)} rows mili hain.")
+    if uploaded_file:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
 
-        # Auto detect email column
-        email_col = None
-        for col in df.columns:
-            sample = df[col].dropna().astype(str)
-            if sample.str.contains('@').sum() > len(sample) * 0.5:
-                email_col = col
-                break
+            st.success(f"File load ho gayi! {len(df)} rows mili hain.")
 
-        if email_col:
-            selected_col = st.selectbox("Email Column", df.columns.tolist(), index=df.columns.tolist().index(email_col))
-        else:
-            selected_col = st.selectbox("Email Column select karo", df.columns.tolist())
+            # Auto detect email column
+            email_col = None
+            for col in df.columns:
+                sample = df[col].dropna().astype(str)
+                if sample.str.contains('@').sum() > len(sample) * 0.5:
+                    email_col = col
+                    break
 
-        # Extract valid emails
-        pattern = r'^[\w\.\+\-]+@[\w\-]+(\.[\w\-]+)+$'
-        raw_emails = df[selected_col].dropna().astype(str).tolist()
-        emails_list = [e.strip() for e in raw_emails if re.match(pattern, e.strip())]
-        invalid_count = len(raw_emails) - len(emails_list)
+            if email_col:
+                selected_col = st.selectbox("Email Column", df.columns.tolist(), index=df.columns.tolist().index(email_col))
+            else:
+                selected_col = st.selectbox("Email Column select karo", df.columns.tolist())
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Rows", len(raw_emails))
-        col2.metric("Valid Emails", len(emails_list), delta=f"-{invalid_count} invalid")
-        col3.metric("Invalid Skip", invalid_count)
+            # Extract valid emails
+            raw_emails = df[selected_col].dropna().astype(str).tolist()
+            cleaned = []
+            for item in raw_emails:
+                found = re.findall(pattern, item)
+                cleaned.extend(found)
+            
+            emails_list = list(dict.fromkeys([e.strip() for e in cleaned]))
+            invalid_count = len(raw_emails) - len(emails_list)
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Rows", len(raw_emails))
+            col2.metric("Valid Unique Emails", len(emails_list))
+            col3.metric("Invalid / Duplicates", max(0, invalid_count))
+
+            with st.expander("Emails Preview dekhein"):
+                st.write(emails_list[:10])
+                if len(emails_list) > 10:
+                    st.caption(f"...aur {len(emails_list)-10} emails")
+
+        except Exception as e:
+            st.error(f"File error: {e}")
+
+else:
+    # ── COPY PASTE MODE ──
+    raw_text = st.text_area(
+        "Emails yahan paste karein (Har line me ek email ya comma/space se separate karein):",
+        height=180,
+        placeholder="client1@example.com\nclient2@gmail.com\nclient3@company.co.uk"
+    )
+
+    if raw_text.strip():
+        extracted = re.findall(pattern, raw_text)
+        emails_list = list(dict.fromkeys([e.strip() for e in extracted]))
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Total Emails Found", len(extracted))
+        col2.metric("Unique Valid Emails", len(emails_list))
 
         with st.expander("Emails Preview dekhein"):
             st.write(emails_list[:10])
             if len(emails_list) > 10:
                 st.caption(f"...aur {len(emails_list)-10} emails")
-
-    except Exception as e:
-        st.error(f"File error: {e}")
 
 # ── SEND BUTTON ──
 st.markdown("---")
@@ -162,7 +188,7 @@ def send_emails(gmail_addr, app_pwd, subj, msg_body, emails):
             time.sleep(2)
             try:
                 server = connect()
-            except Exception as e:
+            except Exception:
                 pass
 
         try:
@@ -222,7 +248,7 @@ if st.button("🚀 Sab Emails Bhejo!", type="primary", disabled=not all_ok, use_
             st.warning(f"⚠️ {failed} emails fail ho gayi:")
             st.write(failed_list)
 
-elif not all_ok and uploaded_file:
+elif not all_ok and (len(emails_list) > 0 or (input_mode == "📁 Excel / CSV File Upload" and uploaded_file)):
     missing = []
     if not gmail: missing.append("Gmail")
     if not app_password: missing.append("App Password")
