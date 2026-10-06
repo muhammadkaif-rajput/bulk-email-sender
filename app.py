@@ -192,10 +192,20 @@ def send_emails(gmail_addr, app_pwd, subj, msg_body, emails):
                 pass
 
         try:
-            msg = MIMEMultipart()
-            msg['From'] = gmail_addr
+            from email.utils import make_msgid, formatdate
+            import random
+
+            msg = MIMEMultipart('alternative')
+            # Sender display name if present
+            sender_name = gmail_addr.split('@')[0].capitalize()
+            msg['From'] = f"{sender_name} <{gmail_addr}>"
             msg['To'] = email
             msg['Subject'] = subj
+            msg['Date'] = formatdate(localtime=True)
+            msg['Message-ID'] = make_msgid(domain=gmail_addr.split('@')[1])
+            msg['Reply-To'] = gmail_addr
+            
+            # Attach plain text
             msg.attach(MIMEText(msg_body, 'plain', 'utf-8'))
 
             try:
@@ -211,7 +221,8 @@ def send_emails(gmail_addr, app_pwd, subj, msg_body, emails):
 
             sent += 1
             status_text.success(f"[{i}/{len(emails)}] Sent: {email}")
-            time.sleep(1.2)
+            # Human-like delay (2 to 4 seconds) to avoid spam filters
+            time.sleep(random.uniform(2.0, 3.5))
 
         except Exception as e:
             failed += 1
